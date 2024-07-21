@@ -1,0 +1,138 @@
+name: Sync Version with latest release
+description: Sync the version of a snap with the upstream release
+author: Soumyadeep Ghosh
+branding:
+  icon: refresh-cw
+  color: orange
+
+inputs:
+  snap-name:
+    description: "Name of the snap"
+    required: true
+  current-version:
+    description: "The current version of the snap"
+    required: true
+  arch:
+    description: "The architecture of the snap"
+    required: false
+    default: amd64
+  launchpad-token:
+    description: "A token with permissions to create remote builds on Launchpad"
+    required: true
+  launchpad-name:
+    description: "Name of the Launchpad user"
+    required: true
+  version-pattern:
+    description: "The pattern of the version"
+    required: false
+  database-name:
+    description: "Name of the database file, should be yaml"
+    required: false
+    default: "config.yaml"
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout Source
+      uses: actions/checkout@v4
+    
+    - name: Get Latest Release
+      id: latest_release
+      shell: bash
+      run: |
+        git_repo=$(yq '.${{ inputs.snap-name }}.git' ${{ inputs.database-name }})
+        LATEST_VERSION=$(git ls-remote -q --refs --tags --sort='v:refname' ${git_repo} | awk -F '/' '{print $3}' | tail -n 1)
+        echo "latest_version=${LATEST_VERSION}" >> $GITHUB_OUTPUT
+        current_version=$(yq '.${{ inputs.snap-name }}.version' ${{ inputs.database-name }})
+        updated=true
+        echo ${current_version}
+        echo ${LATEST_VERSION}
+        if [[ "$LATEST_VERSION" != "$current_version" ]]; then
+          updated=false
+        fi
+        echo $updated
+        echo "updated=${updated}" >> $GITHUB_OUTPUT
+
+    - name: Get Architectures
+      if: steps.latest_release.outputs.updated == 'false'
+      id: get_architectures
+      shell: bash
+      run: |
+        arches=$(yq -r -I=0 -o=json '.${{ inputs.snap-name }}.arches | keys' ${{ inputs.database-name }})
+        echo "arches=${arches}" >> $GITHUB_OUTPUT
+
+    - name: Sync Version
+      if: steps.latest_release.outputs.updated == 'false'
+      id: sync_version
+      shell: bash
+      run: |
+        yq -i '.${{ inputs.snap-name }}.version = "${{ steps.latest_release.outputs.latest_version }}"' ${{ inputs.database-name }}
+
+    - name: Trigger Build
+      if: steps.latest_release.outputs.updated == 'false'
+      id: trigger_build
+      shell: bash
+      env:
+        LP_TOKEN: ${{ inputs.launchpad-token }}
+        LP_USER: ${{ inputs.launchpad-name }}
+        SNAP_NAME: ${{ inputs.snap-name }}
+        ARCH: ${{ inputs.arch }}
+      run: |
+        # Set Up Launchpad Token
+        mkdir -p ~/snap/lp-build-snap/common/
+        echo "${LP_TOKEN}" > ~/snap/lp-build-snap/common/creds
+        
+        # Install lp-build-snap snap
+        sudo snap install lp-build-snap
+
+        # Get the series for the snap
+        series=$(yq ".$SNAP_NAME.series" ${{ inputs.database-name }})
+
+        # Trigger Build
+        output="$(lp-build-snap --lpname ${LP_USER} --credentials ~/snap/lp-build-snap/common/creds --arch ${ARCH} --series ${series} ${SNAP_NAME})"
+        API_URL="$(echo ${output} | grep -oP 'https://[^[:space:]]+')"
+
+        # Look into the build while it's running
+
+        while :
+        do
+            unset buildstate
+            buildstate=$(curl -H 'Cache-Control: no-cache' -s "${API_URL}" | jq -r '.buildstate')
+            echo "${buildstate}"
+
+            if [[ "$buildstate" == "Successfully built" ]]; then
+              break
+            elif [[ "$buildstate" == "Failed to build" ]]; then
+              response=$(curl -s "${API_URL}")
+              buildlog=$(echo ${response} | jq -r '.build_log_url')
+              curl -sL "${buildlog}" | zcat
+              exit 1
+            elif [[ "$buildstate" == "Cancelled build" ]]; then
+              curl -sL "${buildlog}" | zcat
+              exit 1
+            fi
+
+            sleep 10
+        done
+
+        store_upload_status=$(curl -s ${API_URL} | jq '.store_upload_status')
+        
+        # Wait for the store to upload
+        while true; do
+          if [[ "$store_upload_status" != "Uploaded" || "$store_upload_status" != "Failed" ]]; then
+            sleep 5
+          elif [[ "$store_upload_status" == "Failed" ]]; then
+            echo "Failed to upload the snap to the store"
+            exit 1
+          else 
+            break
+          fi
+        done
+        store_revision=$(curl -s ${API_URL} | jq '.store_upload_revision')
+        yq -i '.${{ inputs.snap-name }}.store.edge.rev = "${store_revision}"' ${{ inputs.database-name }}
+        yq -i '.${{ inputs.snap-name }}.store.edge.date = "$(date +%F)"' ${{ inputs.database-name }}
+        git config --global user.name "soumyaDghosh"
+        git config --global user.email "soumyadeepghosh2004@zohomail.in"
+        git add ${{ inputs.database-name }}
+        git commit -m 'chore: bump ${{ inputs.snap-name }} to ${{ steps.latest_release.outputs.latest_version }}'
+        git push

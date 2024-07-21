@@ -1,0 +1,29 @@
+name: Parse the database file
+description: Parse the database file
+author: Soumyadeep Ghosh
+
+inputs:
+  database_name:
+    description: Name of the database file, should be yaml
+    required: true
+    default: "config.yaml"
+
+outputs:
+  snap_names:
+    description: Names of the snaps in the database
+    value: ${{ steps.parse_database.outputs.snap_names }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout Source
+      uses: actions/checkout@v4
+
+    - name: Parse DataBase
+      id: parse_database
+      shell: bash
+      run: |
+        snap_names=$(yq -r -I=0 -o=json '. | keys' ${{ inputs.database_name }})
+        echo "snap_names=$snap_names" >> "$GITHUB_OUTPUT"
+
+    
