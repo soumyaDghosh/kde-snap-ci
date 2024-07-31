@@ -12,6 +12,9 @@ inputs:
   current-version:
     description: "The current version of the snap"
     required: true
+  channel-name:
+    description: "The channel where the snap will be released to"
+    default: edge
   arch:
     description: "The architecture of the snap"
     required: false
@@ -129,8 +132,8 @@ runs:
           fi
         done
         store_revision=$(curl -s ${API_URL} | jq '.store_upload_revision')
-        yq -i '.${{ inputs.snap-name }}.store.edge.rev = "${store_revision}"' ${{ inputs.database-name }}
-        yq -i '.${{ inputs.snap-name }}.store.edge.date = "$(date +%F)"' ${{ inputs.database-name }}
+        yq -i '.${{ inputs.snap-name }}.store.${{ inputs.channel-name }}.rev = "${store_revision}"' ${{ inputs.database-name }}
+        yq -i '.${{ inputs.snap-name }}.store.${{ inputs.channel-name }}.date = "$(date +%F)"' ${{ inputs.database-name }}
         git config --global user.name "soumyaDghosh"
         git config --global user.email "soumyadeepghosh2004@zohomail.in"
         git add ${{ inputs.database-name }}
