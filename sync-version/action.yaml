@@ -32,6 +32,12 @@ inputs:
     description: "Name of the database file, should be yaml"
     required: false
     default: "config.yaml"
+  git-user-name:
+    description: "Name of the git user to commit"
+    required: true
+  git-user-email:
+    description: "Email of the git user to commit"
+    required: true
 
 runs:
   using: composite
@@ -134,8 +140,8 @@ runs:
         store_revision=$(curl -s ${API_URL} | jq '.store_upload_revision')
         yq -i '.${{ inputs.snap-name }}.store.${{ inputs.channel-name }}.rev = "${store_revision}"' ${{ inputs.database-name }}
         yq -i '.${{ inputs.snap-name }}.store.${{ inputs.channel-name }}.date = "$(date +%F)"' ${{ inputs.database-name }}
-        git config --global user.name "soumyaDghosh"
-        git config --global user.email "soumyadeepghosh2004@zohomail.in"
+        git config --global user.name ${{ inputs.git-user-name }}
+        git config --global user.email ${{ inputs.git-user-email }}
         git add ${{ inputs.database-name }}
         git commit -m 'chore: bump ${{ inputs.snap-name }} to ${{ steps.latest_release.outputs.latest_version }}'
         git push
